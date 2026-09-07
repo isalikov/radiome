@@ -1,5 +1,21 @@
 # radiome
 
+<p align="center">
+  <strong>A keyboard-first internet radio player for macOS and Linux.</strong><br>
+  Browse stations, control playback, and keep the music in focus.
+</p>
+
+<p align="center">
+  <a href="https://github.com/isalikov/radiome/releases"><img src="https://img.shields.io/github/v/release/isalikov/radiome?style=flat-square&color=ff2bd6" alt="Latest release"></a>
+  <a href="https://github.com/isalikov/radiome/actions/workflows/release.yml"><img src="https://img.shields.io/github/actions/workflow/status/isalikov/radiome/release.yml?style=flat-square&label=release" alt="Release build"></a>
+</p>
+
+<p align="center">
+  <a href="#install">Install</a> ·
+  <a href="#keyboard">Keyboard</a> ·
+  <a href="#support">Support</a>
+</p>
+
 Keyboard-only Rust radio player for [Radio Record](https://www.radiorecord.ru/).
 Categories on the left, stations on the right, recent tracks below.
 Cyan marks playback; magenta marks the selected category and favorites.
@@ -32,6 +48,16 @@ machines that already have Rust installed.
 
 Installed binaries go to `~/.local/bin/radiome` by default. If that directory is
 not in `PATH`, add it once in your shell profile.
+
+## Support
+
+If radiome is useful to you, you can support its development on Ko-fi:
+
+<p align="center">
+  <a href="https://ko-fi.com/isalikov"><img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="Support radiome on Ko-fi"></a>
+</p>
+
+Bug reports, station suggestions, and small improvements are welcome too.
 
 ## Keyboard
 

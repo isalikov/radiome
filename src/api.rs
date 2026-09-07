@@ -28,15 +28,6 @@ impl Client {
         decode_catalog(&value)
     }
 
-    pub fn get_stations(&self) -> Result<Vec<Station>> {
-        Ok(self.get_catalog()?.stations)
-    }
-
-    pub fn get_now_playing(&self, station_id: i64) -> Result<Option<Track>> {
-        let history = self.get_history(station_id, 1)?;
-        Ok(history.into_iter().next())
-    }
-
     pub fn get_history(&self, station_id: i64, limit: usize) -> Result<Vec<Track>> {
         let value = self.fetch_json(&format!("/station/history/?id={station_id}"))?;
         let mut history = decode_history(&value)?;
@@ -49,7 +40,17 @@ impl Client {
     fn fetch_json(&self, path: &str) -> Result<JsonValue> {
         let url = format!("{}{}", self.base_url, path);
         let output = Command::new("curl")
-            .args(["-fsSL", "--compressed", "-A", USER_AGENT, &url])
+            .args([
+                "-fsSL",
+                "--compressed",
+                "--connect-timeout",
+                "5",
+                "--max-time",
+                "15",
+                "-A",
+                USER_AGENT,
+                &url,
+            ])
             .output()
             .map_err(|err| Error::new(format!("failed to run curl: {err}")))?;
 
@@ -90,17 +91,14 @@ pub struct Station {
 
 impl Station {
     pub fn stream_url(&self) -> Option<&str> {
-        for candidate in [
+        [
             self.stream_320.as_str(),
             self.stream_hls.as_str(),
             self.stream_128.as_str(),
             self.stream_64.as_str(),
-        ] {
-            if !candidate.is_empty() {
-                return Some(candidate);
-            }
-        }
-        None
+        ]
+        .into_iter()
+        .find(|candidate| !candidate.is_empty())
     }
 }
 

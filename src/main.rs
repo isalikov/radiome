@@ -1,13 +1,23 @@
 mod api;
+mod app;
 mod error;
 mod json;
 mod player;
+mod settings;
+mod ui;
 
-use std::io::{self, Write};
-
-use api::{Client, Station};
+use api::{Catalog, Client, Track};
+use app::{Action, App};
+use crossterm::event::{self, Event, KeyEventKind};
 use error::{Error, Result};
-use player::{Player, PlayerState};
+use player::Player;
+use settings::Settings;
+use std::{
+    io::{self, IsTerminal},
+    sync::mpsc::{self, Receiver},
+    thread,
+    time::{Duration, Instant},
+};
 
 fn main() {
     if let Err(err) = run() {
@@ -16,287 +26,170 @@ fn main() {
     }
 }
 
-fn run() -> Result<()> {
-    let client = Client::new();
-    let mut player = Player::new();
-    let mut app = App::load(&client)?;
+struct TerminalGuard;
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        ratatui::restore();
+    }
+}
 
-    println!("radiome");
-    println!("Type 'help' to see commands.");
+fn fetch<T: Send + 'static>(
+    job: impl FnOnce() -> Result<T> + Send + 'static,
+) -> Receiver<Result<T>> {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = tx.send(job());
+    });
+    rx
+}
 
-    loop {
-        player.update();
-        app.player_state = player.state();
-        app.player_error = player.last_error().map(ToString::to_string);
-        app.player_url = player.current_url().map(ToString::to_string);
-        app.render();
+struct Network {
+    catalog: Option<Receiver<Result<Catalog>>>,
+    history: Option<(i64, Receiver<Result<Vec<Track>>>)>,
+    history_updated: Instant,
+}
 
-        print!("> ");
-        io::stdout().flush()?;
-
-        let mut input = String::new();
-        if io::stdin().read_line(&mut input)? == 0 {
-            println!();
-            break;
-        }
-
-        let command = input.trim();
-        if command.is_empty() {
-            continue;
-        }
-
-        match app.handle_command(command, &client, &mut player) {
-            Ok(Exit::Continue) => {}
-            Ok(Exit::Quit) => break,
-            Err(err) => {
-                app.message = format!("error: {err}");
-            }
+impl Network {
+    fn new() -> Self {
+        Self {
+            catalog: None,
+            history: None,
+            history_updated: Instant::now(),
         }
     }
-
-    player.stop();
-    Ok(())
-}
-
-enum Exit {
-    Continue,
-    Quit,
-}
-
-struct App {
-    stations: Vec<Station>,
-    filter: String,
-    selected: usize,
-    message: String,
-    player_state: PlayerState,
-    player_error: Option<String>,
-    player_url: Option<String>,
-}
-
-impl App {
-    fn load(client: &Client) -> Result<Self> {
-        let stations = client.get_stations()?;
-        Ok(Self {
-            stations,
-            filter: String::new(),
-            selected: 0,
-            message: String::from("Loaded stations"),
-            player_state: PlayerState::Idle,
-            player_error: None,
-            player_url: None,
-        })
+    fn catalog(&mut self, app: &mut App) {
+        if self.catalog.is_none() {
+            app.loading = true;
+            self.catalog = Some(fetch(|| Client::new().get_catalog()));
+        }
     }
-
-    fn render(&self) {
-        clear_screen();
-        println!("radiome - minimal Radio Record player");
-        println!(
-            "stations: {} | filter: {}",
-            self.stations.len(),
-            if self.filter.is_empty() {
-                "<none>"
-            } else {
-                &self.filter
-            }
-        );
-        println!(
-            "player: {}{}",
-            match self.player_state {
-                PlayerState::Idle => "idle",
-                PlayerState::Playing => "playing",
-                PlayerState::Error => "error",
-            },
-            self.player_error
+    fn history(&mut self, app: &mut App) {
+        if let Some(station) = &app.now {
+            let id = station.id;
+            if self
+                .history
                 .as_ref()
-                .map(|msg| format!(" ({msg})"))
-                .unwrap_or_default()
-        );
-        if let Some(url) = &self.player_url {
-            println!("url: {url}");
+                .is_some_and(|(pending, _)| *pending == id)
+            {
+                return;
+            }
+            app.history_loading = true;
+            self.history = Some((id, fetch(move || Client::new().get_history(id, 50))));
+            self.history_updated = Instant::now();
         }
-        println!("message: {}", self.message);
-        println!();
-        let filtered = self.filtered_stations();
-        println!("visible stations: {}", filtered.len());
-        for (index, station) in filtered.iter().take(20).enumerate() {
-            let marker = if index == self.selected { ">" } else { " " };
-            let url = station.stream_url().unwrap_or("<no stream>");
-            println!(
-                "{} {:>3}. {:<28} {:<24} {}",
-                marker,
-                index + 1,
-                truncate(&station.title, 28),
-                truncate(&station.tooltip, 24),
-                url
-            );
-        }
-        if filtered.len() > 20 {
-            println!("... and {} more", filtered.len() - 20);
-        }
-        println!();
-        println!(
-            "commands: help | list | search <text> | clear | play [n|text] | stop | now | refresh | up | down | quit"
-        );
     }
-
-    fn handle_command(
-        &mut self,
-        command: &str,
-        client: &Client,
-        player: &mut Player,
-    ) -> Result<Exit> {
-        let mut parts = command.split_whitespace();
-        let head = parts.next().unwrap_or("");
-        let tail = parts.collect::<Vec<_>>().join(" ");
-
-        match head {
-            "q" | "quit" | "exit" => Ok(Exit::Quit),
-            "help" | "?" => {
-                self.message = String::from(
-                    "commands: help | list | search <text> | clear | play [n|text] | stop | now | refresh | up | down | quit",
-                );
-                Ok(Exit::Continue)
-            }
-            "list" => Ok(Exit::Continue),
-            "search" | "filter" => {
-                self.filter = tail;
-                self.selected = 0;
-                self.message = if self.filter.is_empty() {
-                    String::from("filter cleared")
-                } else {
-                    format!("filter set to {:?}", self.filter)
-                };
-                Ok(Exit::Continue)
-            }
-            "clear" => {
-                self.filter.clear();
-                self.selected = 0;
-                self.message = String::from("filter cleared");
-                Ok(Exit::Continue)
-            }
-            "refresh" => {
-                self.stations = client.get_stations()?;
-                self.selected = 0;
-                self.message = format!("reloaded {} stations", self.stations.len());
-                Ok(Exit::Continue)
-            }
-            "up" | "k" => {
-                let len = self.filtered_stations().len();
-                if len > 0 {
-                    if self.selected == 0 {
-                        self.selected = len - 1;
-                    } else {
-                        self.selected -= 1;
+    fn poll(&mut self, app: &mut App) {
+        if let Some(rx) = &self.catalog {
+            match rx.try_recv() {
+                Ok(result) => {
+                    app.loading = false;
+                    match result {
+                        Ok(catalog) => app.set_catalog(catalog),
+                        Err(_) => app.error = Some("Stations unavailable · r retry".into()),
                     }
+                    self.catalog = None;
                 }
-                Ok(Exit::Continue)
-            }
-            "down" | "j" => {
-                let len = self.filtered_stations().len();
-                if len > 0 {
-                    self.selected = (self.selected + 1) % len;
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    app.loading = false;
+                    app.error = Some("Loading interrupted · r retry".into());
+                    self.catalog = None;
                 }
-                Ok(Exit::Continue)
+                Err(mpsc::TryRecvError::Empty) => {}
             }
-            "stop" => {
-                player.stop();
-                self.message = String::from("stopped playback");
-                Ok(Exit::Continue)
-            }
-            "now" => {
-                self.message = self
-                    .now_playing(client)
-                    .unwrap_or_else(|err| format!("now playing unavailable: {err}"));
-                Ok(Exit::Continue)
-            }
-            "play" | "p" => {
-                let selected = if tail.is_empty() {
-                    self.filtered_stations().get(self.selected).cloned()
-                } else if let Ok(index) = tail.parse::<usize>() {
-                    self.filtered_stations()
-                        .get(index.saturating_sub(1))
-                        .cloned()
-                } else {
-                    self.filtered_stations()
-                        .into_iter()
-                        .find(|station| station.title.to_lowercase().contains(&tail.to_lowercase()))
-                };
-
-                let station =
-                    selected.ok_or_else(|| Error::new("no station matched the request"))?;
-                let url = station
-                    .stream_url()
-                    .ok_or_else(|| Error::new("station has no stream URL"))?;
-                player.play(url)?;
-                self.message = match self.now_playing_for_station(client, &station) {
-                    Ok(Some(track)) if !track.song.is_empty() || !track.artist.is_empty() => {
-                        format!(
-                            "playing {} - {} / {}",
-                            station.title, track.artist, track.song
-                        )
+        }
+        if let Some((id, rx)) = &self.history {
+            match rx.try_recv() {
+                Ok(result) => {
+                    if app.now.as_ref().is_some_and(|station| station.id == *id) {
+                        app.history_loading = false;
+                        match result {
+                            Ok(history) => app.set_history(*id, history),
+                            Err(_) => {
+                                app.history_error = Some("History unavailable · r retry".into())
+                            }
+                        }
                     }
-                    Ok(_) => format!("playing {}", station.title),
-                    Err(_) => format!("playing {}", station.title),
-                };
-                Ok(Exit::Continue)
+                    self.history = None;
+                    self.history_updated = Instant::now();
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.history = None;
+                    app.history_loading = false;
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
             }
-            _ => {
-                self.message = format!("unknown command: {head}");
-                Ok(Exit::Continue)
-            }
         }
-    }
-
-    fn filtered_stations(&self) -> Vec<&Station> {
-        if self.filter.is_empty() {
-            return self.stations.iter().collect();
+        if self.history.is_none() && self.history_updated.elapsed() >= Duration::from_secs(15) {
+            self.history(app);
         }
-        let needle = self.filter.to_lowercase();
-        self.stations
-            .iter()
-            .filter(|station| {
-                station.title.to_lowercase().contains(&needle)
-                    || station.tooltip.to_lowercase().contains(&needle)
-                    || station.prefix.to_lowercase().contains(&needle)
-            })
-            .collect()
-    }
-
-    fn now_playing(&self, client: &Client) -> Result<String> {
-        let station = self
-            .filtered_stations()
-            .get(self.selected)
-            .copied()
-            .ok_or_else(|| Error::new("no station selected"))?;
-        match self.now_playing_for_station(client, station)? {
-            Some(track) if !track.song.is_empty() || !track.artist.is_empty() => Ok(format!(
-                "{}: {} - {} ({})",
-                station.title, track.artist, track.song, track.time_formatted
-            )),
-            _ => Ok(format!("{}: no recent track data", station.title)),
-        }
-    }
-
-    fn now_playing_for_station(
-        &self,
-        client: &Client,
-        station: &Station,
-    ) -> Result<Option<api::Track>> {
-        client.get_now_playing(station.id)
     }
 }
 
-fn clear_screen() {
-    print!("\x1B[2J\x1B[H");
-}
-
-fn truncate(value: &str, max_chars: usize) -> String {
-    let mut out = String::new();
-    for ch in value.chars().take(max_chars) {
-        out.push(ch);
+fn run() -> Result<()> {
+    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+        return Err(Error::new("Open a terminal and run make run"));
     }
-    if value.chars().count() > max_chars {
-        out.push('…');
+    let settings_path = Settings::path()?;
+    let settings = Settings::load(&settings_path)?;
+    let mut player = Player::new(settings.volume);
+    let mut app = App::new(settings);
+    let mut network = Network::new();
+    network.catalog(&mut app);
+    let mut terminal = ratatui::try_init()?;
+    let _guard = TerminalGuard;
+    let mut last_frame = Instant::now();
+    let mut last_save = Instant::now();
+    loop {
+        network.poll(&mut app);
+        player.update();
+        app.playback = player.snapshot.clone();
+        for direction in player.media_commands() {
+            if let Action::Play(url) = app.skip_station(direction) {
+                player.play(&url);
+                network.history(&mut app);
+            }
+        }
+        if last_frame.elapsed() >= Duration::from_millis(50) {
+            terminal.draw(|frame| ui::render(frame, &mut app))?;
+            last_frame = Instant::now();
+        }
+        if app.dirty && last_save.elapsed() >= Duration::from_millis(500) {
+            if let Err(err) = app.settings.save(&settings_path) {
+                app.error = Some(format!("Could not save settings: {err}"));
+            } else {
+                app.dirty = false;
+            }
+            last_save = Instant::now();
+        }
+        if event::poll(Duration::from_millis(10))? {
+            match event::read()? {
+                Event::Key(key) if key.kind != KeyEventKind::Release => match app.key(key) {
+                    Action::Quit => break,
+                    Action::Play(url) => {
+                        player.play(&url);
+                        network.history(&mut app);
+                    }
+                    Action::Pause => player.toggle_pause(),
+                    Action::Stop => {
+                        player.stop();
+                        network.history = None;
+                    }
+                    Action::Volume(value) => player.set_volume(value),
+                    Action::Refresh => {
+                        network.catalog(&mut app);
+                        network.history(&mut app);
+                    }
+                    Action::None => {}
+                },
+                Event::Resize(_, _) => {
+                    terminal.draw(|frame| ui::render(frame, &mut app))?;
+                }
+                _ => {}
+            }
+        }
     }
-    out
+    if app.dirty {
+        app.settings.save(&settings_path)?;
+    }
+    Ok(())
 }

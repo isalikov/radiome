@@ -209,7 +209,7 @@ impl<'a> Parser<'a> {
 
     fn parse_number(&mut self) -> Result<JsonValue> {
         let start = self.pos;
-        if self.consume('-') {}
+        self.consume('-');
         self.consume_digits();
         if self.consume('.') {
             self.consume_digits();

@@ -11,6 +11,10 @@
 </p>
 
 <p align="center">
+  <img src="assets/player-preview.png" alt="radiome player preview">
+</p>
+
+<p align="center">
   <a href="#install">Install</a> ·
   <a href="#keyboard">Keyboard</a> ·
   <a href="#support">Support</a>

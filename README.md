@@ -17,6 +17,22 @@ Plain `make` prints help. Minimum terminal size: 44 × 12. History is hidden in
 short windows to leave room for stations. Truecolor terminals show the full palette;
 `NO_COLOR` disables colors.
 
+## Install
+
+Once release archives are published, users can install with one command:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/isalikov/radiome/master/scripts/install.sh | sh
+```
+
+The script downloads the latest GitHub Release for the current macOS or Linux
+architecture. If no release archive exists yet, it falls back to `cargo install`
+from this repository, so the same command also works for local development
+machines that already have Rust installed.
+
+Installed binaries go to `~/.local/bin/radiome` by default. If that directory is
+not in `PATH`, add it once in your shell profile.
+
 ## Keyboard
 
 | Key | Action |

@@ -74,3 +74,28 @@ case ":$PATH:" in
 		printf '%s\n' "Add $bin_dir to PATH if radiome is not found after installation"
 		;;
 esac
+
+# radiome spawns mpv for audio and curl for API requests at runtime.
+case "$platform" in
+	macos)
+		mpv_hint="brew install mpv"
+		;;
+	*)
+		mpv_hint="sudo apt install mpv   # or your distribution's package manager"
+		;;
+esac
+
+if ! have mpv; then
+	printf '\n%s\n%s\n' \
+		"mpv is not installed. radiome cannot play audio without it:" \
+		"  $mpv_hint"
+else
+	# Warm up mpv once. On macOS the first launch of a freshly installed mpv can
+	# take many seconds while the system verifies its libraries; doing it here
+	# keeps the first station from timing out inside radiome.
+	mpv --version >/dev/null 2>&1 || true
+fi
+
+if ! have curl; then
+	printf '\n%s\n' "curl is not installed. radiome needs it to load the station list."
+fi

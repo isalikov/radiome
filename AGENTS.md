@@ -6,8 +6,8 @@ Guidance for AI coding agents (Claude Code, Codex, Cursor, Gemini CLI, and other
 
 These apply to every agent and every session in this repo.
 
-1. **Never run git.** No `git status`, `git diff`, `git add`, `git commit`, or anything else. The user commits by hand. `.claude/settings.json` denies git in Claude Code; other agents must follow this rule on their own.
-2. **End every session that changed files by suggesting a commit message.** Use the `commit-message` skill (`.claude/skills/commit-message/SKILL.md`): `feat/`, `fix/`, or `chore/` prefix, imperative subject, optional short body, printed in a code block for the user to paste.
+1. **Never change git state.** Read-only git is allowed: `git status`, `git diff`, `git log`, `git show`, `git ls-files`, `git blame`. Everything else (`add`, `commit`, `push`, `checkout`, `stash`, `reset`, ...) is forbidden; the user commits by hand. In Claude Code, `.claude/settings.json` and the `.claude/hooks/block-git.sh` hook enforce this, including inside compound commands. Other agents must follow the rule on their own.
+2. **End every session that changed files by suggesting exactly one commit message for everything uncommitted.** Run `git status --short`, `git diff`, and `git diff --cached`, and describe what is actually in the tree (staged, unstaged, and untracked), not what you remember doing. Never propose splitting into several commits. Use the `commit-message` skill (`.claude/skills/commit-message/SKILL.md`): `feat/`, `fix/`, or `chore/` prefix, imperative subject, a short body listing the changes, printed in a single code block for the user to paste. Print the message only, never a `git add` or `git commit` command.
 3. **Update README.md after any player change.** If you touched `src/player.rs`, `src/app.rs`, `src/ui.rs`, or `src/main.rs` in a way that changes keybindings, playback, metering, settings, or env options, sync `README.md` and `CHANGELOG.md` in the same session, before the commit message. The `readme-sync` skill describes what to check.
 
 ## What this is
@@ -15,6 +15,8 @@ These apply to every agent and every session in this repo.
 radiome is a keyboard-only terminal radio player for [Radio Record](https://www.radiorecord.ru/), written in Rust (edition 2024) with Ratatui + Crossterm. It is a single binary crate (`src/main.rs`) with no workspace, no async runtime, and no HTTP or audio libraries: **curl** (subprocess) fetches API JSON and **mpv** (subprocess, JSON IPC over a Unix socket) plays audio. Both must be installed to run the app; unit tests do not need them.
 
 ## Commands
+
+The Rust toolchain is pinned in `mise.toml` (`rust = "stable"`). With [mise](https://mise.jdx.dev) activated in the shell, `cargo` resolves automatically inside this directory; run `mise install` once after cloning. mpv and curl are system packages and are not managed by mise.
 
 ```sh
 make build        # cargo build

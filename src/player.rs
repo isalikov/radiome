@@ -11,6 +11,10 @@ use std::{
 };
 
 const TICK: Duration = Duration::from_millis(50);
+// How long to wait for mpv to open its IPC socket. The first launch of a freshly
+// installed mpv can take well over five seconds on macOS while the system verifies
+// the binary and its libraries; later launches take a fraction of a second.
+const IPC_STARTUP_GRACE: Duration = Duration::from_secs(20);
 const METER: &str = "--af-add=@radiome_meter:lavfi=[astats=metadata=1:reset=1:measure_perchannel=none:measure_overall=RMS_level]";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -285,8 +289,13 @@ impl Engine {
                         self.command(json!(["observe_property", id, property]));
                     }
                 }
-                Err(_) if self.started.elapsed() < Duration::from_secs(5) => return Ok(()),
-                Err(err) => return Err(Error::new(format!("mpv IPC: {err}"))),
+                Err(_) if self.started.elapsed() < IPC_STARTUP_GRACE => return Ok(()),
+                Err(err) => {
+                    return Err(Error::new(format!(
+                        "mpv did not open its IPC socket in {}s ({err}) · Enter to retry",
+                        IPC_STARTUP_GRACE.as_secs()
+                    )));
+                }
             }
         }
         if self.metered.elapsed() >= TICK {

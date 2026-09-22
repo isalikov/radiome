@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented here.
 
+## [Unreleased]
+
+- Wait up to 20 seconds (was 5) for mpv to open its IPC socket, so a slow first
+  launch of a freshly installed mpv on macOS no longer fails with
+  `mpv IPC: No such file or directory`. The error now says how to retry.
+- Installer checks for mpv and curl after installing and prints the install
+  command when missing; warms up mpv once so the first station plays promptly.
+- README: troubleshooting section for the two mpv startup errors; mise-based
+  Rust setup instructions.
+- `scripts/uninstall.sh` removes the installed binary and, with `--purge` or
+  `RADIOME_PURGE=1`, the settings directory. Documented in the README.
+
 ## [v1.0.0] - 2026-09-07
 
 Initial release of the keyboard-only Rust radio player.

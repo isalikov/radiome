@@ -27,9 +27,15 @@ Cyan marks playback; magenta marks the selected category and favorites.
 ## Run
 
 Requires Rust/Cargo, curl with compression support, and mpv with FFmpeg's astats filter.
-Supports macOS and Linux. On macOS: `brew install rust curl mpv`.
+Supports macOS and Linux.
+
+The Rust toolchain is pinned in `mise.toml`. With [mise](https://mise.jdx.dev) installed,
+`mise install` in this directory fetches the right `cargo`, `rustfmt`, and `clippy`.
+Any other Rust installation (rustup, distro package) works as well. mpv is a system
+package; on macOS `brew install mpv`, on Debian/Ubuntu `apt install mpv`.
 
 ```sh
+mise install
 make run
 ```
 
@@ -52,6 +58,41 @@ machines that already have Rust installed.
 
 Installed binaries go to `~/.local/bin/radiome` by default. If that directory is
 not in `PATH`, add it once in your shell profile.
+
+The installer does not install mpv or curl. It checks for both at the end and prints
+the install command for your platform if either is missing.
+
+### Troubleshooting
+
+**`Could not start mpv: No such file or directory`** — mpv is not installed or not
+in `PATH`. Install it (`brew install mpv` on macOS, `apt install mpv` on Debian/Ubuntu)
+and make sure `mpv --version` works in the same terminal you run radiome from.
+
+**`mpv did not open its IPC socket in 20s`** — mpv started but did not respond in
+time. On macOS this happens on the very first launch of a freshly installed mpv,
+while the system verifies its libraries. Press Enter to retry; the second start is
+fast. Running `mpv --version` once from the terminal after installing has the same
+effect. If it keeps happening, check that `/tmp` is writable, since the IPC socket
+lives in a temporary directory there.
+
+## Uninstall
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/isalikov/radiome/master/scripts/uninstall.sh | sh
+```
+
+This removes `~/.local/bin/radiome` (or `$RADIOME_PREFIX/bin/radiome` if you installed
+with a custom prefix) and keeps your favorites and volume. To delete the settings too,
+pass `--purge` when running the script directly, or set `RADIOME_PURGE=1` when piping
+it from curl:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/isalikov/radiome/master/scripts/uninstall.sh | RADIOME_PURGE=1 sh
+```
+
+Settings live in `~/.config/radiome` by default; the script honours the same
+`RADIOME_CONFIG_DIR` and `XDG_CONFIG_HOME` overrides as the app. mpv and curl are left
+installed since other software may use them.
 
 ## Support
 

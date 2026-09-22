@@ -1,0 +1,58 @@
+# AGENTS.md
+
+Guidance for AI coding agents (Claude Code, Codex, Cursor, Gemini CLI, and others) working in this repository.
+
+## Working rules
+
+These apply to every agent and every session in this repo.
+
+1. **Never run git.** No `git status`, `git diff`, `git add`, `git commit`, or anything else. The user commits by hand. `.claude/settings.json` denies git in Claude Code; other agents must follow this rule on their own.
+2. **End every session that changed files by suggesting a commit message.** Use the `commit-message` skill (`.claude/skills/commit-message/SKILL.md`): `feat/`, `fix/`, or `chore/` prefix, imperative subject, optional short body, printed in a code block for the user to paste.
+3. **Update README.md after any player change.** If you touched `src/player.rs`, `src/app.rs`, `src/ui.rs`, or `src/main.rs` in a way that changes keybindings, playback, metering, settings, or env options, sync `README.md` and `CHANGELOG.md` in the same session, before the commit message. The `readme-sync` skill describes what to check.
+
+## What this is
+
+radiome is a keyboard-only terminal radio player for [Radio Record](https://www.radiorecord.ru/), written in Rust (edition 2024) with Ratatui + Crossterm. It is a single binary crate (`src/main.rs`) with no workspace, no async runtime, and no HTTP or audio libraries: **curl** (subprocess) fetches API JSON and **mpv** (subprocess, JSON IPC over a Unix socket) plays audio. Both must be installed to run the app; unit tests do not need them.
+
+## Commands
+
+```sh
+make build        # cargo build
+make run          # cargo run (must be run in a real terminal; stdin/stdout are checked)
+make test         # cargo test (all non-ignored tests, no mpv/network needed)
+make check        # cargo fmt --check && cargo clippy --all-targets -- -D warnings
+make fmt          # cargo fmt
+make test-audio   # runs the one #[ignore]d test that spawns real mpv with --ao=null
+```
+
+Run a single test by name, e.g. `cargo test parses_history` or `cargo test app::tests::`. Clippy warnings are errors in `make check`, so keep the tree clippy-clean.
+
+Releases are built by `.github/workflows/release.yml` on `v*` tags with `cargo build --release --locked`, so `Cargo.lock` must be committed and up to date.
+
+Dev overrides: `RADIOME_BASE_URL` (API base), `RADIOME_CONFIG_DIR` (settings location, precedence over `XDG_CONFIG_HOME`), `NO_COLOR`.
+
+## Architecture
+
+Three threads of control, all communicating through `std::sync::mpsc`; the main thread never blocks on network or audio.
+
+**Main loop (`main.rs`)** — single-threaded event loop ticking every ~10 ms. Each iteration: poll network receivers, pull the latest player `Snapshot`, drain mpv-originated media commands (prev/next), redraw at most every 50 ms, debounce-save settings (500 ms) when `app.dirty`, then poll one crossterm event. `Network` holds `Option<Receiver>`s for the in-flight catalog and history fetches; each fetch is a one-shot `thread::spawn` + channel (`fetch()`). History refreshes every 15 s while a station is playing.
+
+**`app.rs` — pure state machine.** `App::key(KeyEvent) -> Action` is the only input entry point and returns an `Action` enum (`Play(url)`, `Pause`, `Stop`, `Volume`, `Refresh`, `Quit`, `None`) that `main.rs` dispatches to the player/network. `App` never touches I/O, which is why keyboard behavior is unit-tested by pressing keys on `app::tests::fixture()` and asserting on `Action`s and state. Key invariants encoded here and in tests: browsing (arrows, Tab) never changes the playing station (`now`); categories are `All`, `Favorites`, then genres derived from the catalog; `set_history` drops results for a station that is no longer `now` (stale-response guard).
+
+**`player.rs` — mpv worker.** `Player` (main-thread handle) sends `Request`s to a worker thread that owns an `Engine` (the mpv `Child` + Unix socket + line-buffered IPC). Every `Play`/`Stop` bumps a `generation` counter; the worker tags each `Snapshot` it sends back with the generation it belongs to, and `Player::update` discards snapshots from older generations so late mpv events can't resurrect a stopped or replaced station. The mpv `input.conf` written per-session maps macOS RemoteCommandCenter PREV/NEXT to `script-message radiome-previous/next`, which the engine turns into `media` commands that flow back to `App::skip_station` — Rust owns the station list; mpv only owns play/pause. The audio level line comes from an `astats` lavfi filter polled at 20 Hz; `AudioMeter` normalises dB against a rolling percentile window rather than absolute scale.
+
+**`api.rs` + `json.rs`.** `Client` shells out to curl and decodes with a hand-written JSON parser (`json.rs`) into plain structs (`Catalog`, `Station`, `Track`). `serde_json` is in the dependency tree but is only used for mpv IPC (`player.rs`) and `settings.rs`; API decoding intentionally uses `json.rs`. Stream selection priority lives in `Station::stream_url()`: `stream_320` → `stream_hls` → `stream_128` → `stream_64`.
+
+**`ui.rs` — render only.** `ui::render(frame, &mut App)` reads `App` and draws; it holds no state except the `ListState`s inside `App`. Layout gates: below 44×12 it shows a placeholder, history panel is hidden when the body is shorter than 12 rows, sidebar width switches at 90 columns. UI tests render into `ratatui::backend::TestBackend` and assert on buffer contents.
+
+**`settings.rs`.** `Settings { favorites: BTreeSet<i64>, volume: u8 }` serialized with serde to `settings.json`; saves go through a `NamedTempFile` + `persist` so writes are atomic, and a corrupt file is an error rather than being overwritten.
+
+**`error.rs`.** One string-backed `Error` type and a crate-wide `Result<T>` alias; there is no error enum, messages are meant to be shown to the user directly.
+
+## Conventions worth knowing
+
+- Station and track names keep their original (Russian) spelling from the API; only application labels are English. `Category::title()` translates a fixed set of genre names.
+- User-facing status strings follow the pattern `"<Problem> · r retry"` (see `main.rs`).
+- Tests live in `#[cfg(test)] mod tests` inside each file; `app::tests` is `pub` so `ui.rs` can reuse `fixture()` and `press()`.
+- `.editorconfig`: 4-space Rust, LF, final newline; `Makefile` uses tabs.
+- README.md documents the full keyboard map and runtime behavior; update it (and `CHANGELOG.md`) when changing keybindings or user-visible behavior.
